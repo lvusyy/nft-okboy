@@ -3,7 +3,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 BIN     := okboy
 GO      ?= go
 
-.PHONY: build static test vet fmt integration release clean
+.PHONY: build static release-bins test vet fmt integration release clean
 
 # Host build (dev).
 build:
@@ -13,6 +13,14 @@ build:
 # modernc.org/sqlite driver → no libc dependency, drops onto any Linux host.
 static:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-amd64 ./cmd/okboy
+
+# All release architectures. Because the project is pure Go (CGO_ENABLED=0 + the
+# pure-Go modernc.org/sqlite driver), cross-compiling is free — no C toolchain.
+release-bins:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64       $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-amd64 ./cmd/okboy
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64       $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-arm64 ./cmd/okboy
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-armv7 ./cmd/okboy
+	cd dist && sha256sum $(BIN)-linux-* > SHA256SUMS
 
 # Hermetic unit tests (run anywhere, incl. non-Linux dev — MockBackend, no nft/root).
 test:

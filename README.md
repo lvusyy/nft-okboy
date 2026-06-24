@@ -53,6 +53,8 @@ SQLite（modernc 纯 Go；users/groups/membership/audit）
 make static          # → dist/okboy-linux-amd64（CGO_ENABLED=0，静态）
 ```
 
+> 多架构：`make release-bins` 一次构建 **amd64 / arm64 / armv7**（纯 Go，零成本交叉编译，无需 C 工具链）；[Releases](https://github.com/lvusyy/nft-okboy/releases) 已提供三种预编译二进制 + `SHA256SUMS`。
+
 **配置 + 运行：**
 
 ```bash

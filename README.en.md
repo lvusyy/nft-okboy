@@ -65,6 +65,8 @@ SQLite (pure-Go modernc; users/groups/membership/audit)
 make static          # → dist/okboy-linux-amd64 (CGO_ENABLED=0, static)
 ```
 
+> Multi-arch: `make release-bins` builds **amd64 / arm64 / armv7** in one go (pure Go, free cross-compile — no C toolchain); the [Releases](https://github.com/lvusyy/nft-okboy/releases) page ships all three prebuilt binaries plus `SHA256SUMS`.
+
 **Configure and run:**
 
 ```bash
