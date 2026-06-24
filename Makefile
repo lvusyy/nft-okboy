@@ -18,8 +18,14 @@ static:
 # pure-Go modernc.org/sqlite driver), cross-compiling is free — no C toolchain.
 release-bins:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64       $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-amd64 ./cmd/okboy
+	CGO_ENABLED=0 GOOS=linux GOARCH=386         $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-386 ./cmd/okboy
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64       $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-arm64 ./cmd/okboy
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-armv7 ./cmd/okboy
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-armv6 ./cmd/okboy
+	CGO_ENABLED=0 GOOS=linux GOARCH=riscv64     $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-riscv64 ./cmd/okboy
+	CGO_ENABLED=0 GOOS=linux GOARCH=ppc64le     $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-ppc64le ./cmd/okboy
+	CGO_ENABLED=0 GOOS=linux GOARCH=s390x       $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-s390x ./cmd/okboy
+	CGO_ENABLED=0 GOOS=linux GOARCH=loong64     $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BIN)-linux-loong64 ./cmd/okboy
 	cd dist && sha256sum $(BIN)-linux-* > SHA256SUMS
 
 # Hermetic unit tests (run anywhere, incl. non-Linux dev — MockBackend, no nft/root).
