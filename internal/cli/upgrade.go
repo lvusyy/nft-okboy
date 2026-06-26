@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -167,9 +170,20 @@ func sameVersion(version, tag string) bool {
 	return strings.TrimPrefix(version, "v") == strings.TrimPrefix(tag, "v")
 }
 
-// httpClient is the shared client for upgrade downloads (bounded so a stalled
-// mirror fails over instead of hanging).
-func httpClient() *http.Client { return &http.Client{Timeout: 90 * time.Second} }
+// httpClient is the client for the small GitHub API call (latest-release lookup).
+// Short connect / response-header timeouts make it fail FAST to the caller's
+// fallback when api.github.com is unreachable, instead of stalling ~90s.
+func httpClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 8 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   8 * time.Second,
+			ResponseHeaderTimeout: 15 * time.Second,
+		},
+	}
+}
 
 // latestReleaseTag resolves the newest release tag via the GitHub API.
 func latestReleaseTag(repo string) (string, error) {
@@ -206,25 +220,65 @@ func ghDownload(repo, tag, asset string) ([]byte, error) {
 	path := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repo, tag, asset)
 	var lastErr error
 	for _, m := range ghMirrors {
-		resp, err := httpClient().Get(m + path)
+		b, err := ghGet(m + path)
 		if err != nil {
 			lastErr = err
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			lastErr = fmt.Errorf("%s%s → HTTP %d", m, path, resp.StatusCode)
-			continue
-		}
-		b, rerr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if rerr != nil {
-			lastErr = rerr
 			continue
 		}
 		return b, nil
 	}
 	return nil, lastErr
+}
+
+// ghGet downloads url with a stall watchdog: a short connect timeout plus a 20s
+// no-progress abort. The GitHub release CDN can connect, return 200, then reset
+// mid-transfer; a client with only a total timeout would wait that out before the
+// caller fails over to a mirror, making `upgrade` slow on networks where the direct
+// path is blackholed. Resetting the watchdog on every chunk lets a genuinely slow-
+// but-progressing download continue up to the hard cap.
+func ghGet(url string) ([]byte, error) {
+	const (
+		connectTimeout = 8 * time.Second
+		stallTimeout   = 20 * time.Second
+		hardCap        = 10 * time.Minute
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), hardCap)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: connectTimeout}).DialContext,
+		TLSHandshakeTimeout:   connectTimeout,
+		ResponseHeaderTimeout: stallTimeout,
+	}}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s → HTTP %d", url, resp.StatusCode)
+	}
+	watchdog := time.AfterFunc(stallTimeout, cancel) // fires if a read stalls
+	defer watchdog.Stop()
+	var buf bytes.Buffer
+	chunk := make([]byte, 64*1024)
+	for {
+		n, rerr := resp.Body.Read(chunk)
+		if n > 0 {
+			buf.Write(chunk[:n])
+			watchdog.Reset(stallTimeout)
+		}
+		if rerr == io.EOF {
+			return buf.Bytes(), nil
+		}
+		if rerr != nil {
+			return nil, rerr
+		}
+	}
 }
 
 // assetForHost maps the running platform to its published release asset name, or
