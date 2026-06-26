@@ -147,8 +147,8 @@ sudo okboy upgrade --check   # check only, do not install
 ### From source / manual
 
 ```bash
-make static                                  # → dist/okboy-linux-amd64 (CGO_ENABLED=0, static)
-#   or: curl -fsSLO https://github.com/lvusyy/nft-okboy/releases/latest/download/okboy-linux-amd64
+make static                                  # → dist/nft-okboy-linux-amd64 (CGO_ENABLED=0, static)
+#   or: curl -fsSLO https://github.com/lvusyy/nft-okboy/releases/latest/download/nft-okboy-linux-amd64
 cp config.example.yaml config.yaml
 ./okboy gen-secret alice                     # generate a user secret
 ./okboy -c config.yaml user-add alice        # create the user
@@ -231,7 +231,7 @@ reviewed with codex.
 ## Deploy
 
 ```bash
-install -Dm755 dist/okboy-linux-amd64 /opt/okboy/okboy
+install -Dm755 dist/nft-okboy-linux-amd64 /opt/okboy/okboy
 install -Dm600 config.yaml /etc/okboy/config.yaml
 install -Dm644 deploy/okboy.service /etc/systemd/system/okboy.service
 systemctl enable --now okboy

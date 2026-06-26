@@ -129,8 +129,8 @@ sudo okboy upgrade --check   # 只检查不安装
 ### 从源码 / 手动
 
 ```bash
-make static                                  # → dist/okboy-linux-amd64（CGO_ENABLED=0，静态）
-#   或下载：curl -fsSLO https://github.com/lvusyy/nft-okboy/releases/latest/download/okboy-linux-amd64
+make static                                  # → dist/nft-okboy-linux-amd64（CGO_ENABLED=0，静态）
+#   或下载：curl -fsSLO https://github.com/lvusyy/nft-okboy/releases/latest/download/nft-okboy-linux-amd64
 cp config.example.yaml config.yaml
 ./okboy gen-secret alice                     # 生成用户密钥
 ./okboy -c config.yaml user-add alice        # 建用户
@@ -211,7 +211,7 @@ make integration   # 隔离 netns 内真实 nftables（Linux+root）—— 对 h
 ## 部署
 
 ```bash
-install -Dm755 dist/okboy-linux-amd64 /opt/okboy/okboy
+install -Dm755 dist/nft-okboy-linux-amd64 /opt/okboy/okboy
 install -Dm600 config.yaml /etc/okboy/config.yaml
 install -Dm644 deploy/okboy.service /etc/systemd/system/okboy.service
 systemctl enable --now okboy

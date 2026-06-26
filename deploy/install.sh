@@ -42,7 +42,7 @@ case "$(uname -m)" in
   s390x)         ARCH=s390x ;;
   *) die "No prebuilt binary for $(uname -m). Build from source." ;;
 esac
-ASSET="okboy-linux-$ARCH"
+ASSET="nft-okboy-linux-$ARCH"
 for t in curl install sha256sum systemctl; do
   command -v "$t" >/dev/null 2>&1 || die "Required command not found: $t"
 done

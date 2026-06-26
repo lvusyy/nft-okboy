@@ -292,14 +292,14 @@ func ghGet(url string) ([]byte, error) {
 
 // assetForHost maps the running platform to its published release asset name, or
 // "" when no prebuilt binary is published for it. The release ships one static
-// binary per linux arch named "okboy-linux-<arch>".
+// binary per linux arch named "nft-okboy-linux-<arch>".
 func assetForHost() string {
 	if runtime.GOOS != "linux" {
 		return ""
 	}
 	switch runtime.GOARCH {
 	case "amd64", "arm64", "386", "loong64", "ppc64le", "riscv64", "s390x":
-		return "okboy-linux-" + runtime.GOARCH
+		return "nft-okboy-linux-" + runtime.GOARCH
 	default:
 		// "arm" cannot be disambiguated into armv6/armv7 at runtime — deploy/
 		// install.sh resolves that from `uname -m`.
