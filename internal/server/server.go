@@ -82,14 +82,6 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/totp/activate", s.totpActivate)
 	mux.HandleFunc("DELETE /api/admin/totp", s.totpDisable)
 
-	// ---- API JSON 404 fallback ---- //
-	// Any /api/ request the patterns above do not match — an unknown path, or a
-	// known path with the wrong method (Go 1.22 routes both to this less-specific
-	// subtree pattern) — gets the {ok:false,error} JSON envelope instead of the
-	// mux's PLAIN-TEXT 404/405, which the JSON-parsing SPA / API clients cannot
-	// read. This mirrors the backend half of the upstream JSON error contract.
-	mux.HandleFunc("/api/", s.apiNotFound)
-
 	// ---- Health (no auth) ---- //
 	mux.HandleFunc("GET /health", s.health)
 
@@ -101,14 +93,6 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /static/", s.serveIndex)
 
 	return s.throttleGate(mux)
-}
-
-// apiNotFound is the JSON catch-all for any /api/ request the route table does
-// not match (unknown path, or a known path with the wrong method). It keeps the
-// API's {ok:false,"error"} contract instead of the mux's plain-text 404/405 — the
-// Go counterpart of app.py's @errorhandler JSON responses.
-func (s *Server) apiNotFound(w http.ResponseWriter, r *http.Request) {
-	errJSON(w, http.StatusNotFound, "Not found")
 }
 
 // health is the no-auth liveness probe. Shape mirrors app.py's /health plus the
