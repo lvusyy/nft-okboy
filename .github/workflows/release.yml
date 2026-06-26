@@ -37,4 +37,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" dist/nft-okboy-linux-* dist/SHA256SUMS \
-            --title "okboy ${GITHUB_REF_NAME}" --generate-notes
+            --title "nft-okboy ${GITHUB_REF_NAME}" \
+            --notes-file .github/release-notes.md --generate-notes
