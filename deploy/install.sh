@@ -51,9 +51,15 @@ command -v nft >/dev/null 2>&1 || warn "nft (nftables) is not installed — inst
 # ---- resolve version (latest release, or OKBOY_VERSION) ----
 VER="${OKBOY_VERSION:-}"
 if [ -z "$VER" ]; then
+  # Resolve the latest tag from the releases/latest redirect (not the GitHub API),
+  # so it works through the SAME CN-friendly mirrors as the downloads — the API host
+  # is often blocked on networks where the mirror still serves.
   say "Resolving latest release…"
-  VER=$(curl -fsSL --connect-timeout 8 --max-time 30 "https://api.github.com/repos/$REPO/releases/latest" \
-        | sed -n 's/.*"tag_name":[ ]*"\([^"]*\)".*/\1/p' | head -n1) || true
+  for pre in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
+    VER=$(curl -fsSL --connect-timeout 8 --max-time 25 -o /dev/null -w '%{url_effective}' \
+          "${pre}https://github.com/$REPO/releases/latest" 2>/dev/null | sed -n 's#.*/tag/##p')
+    [ -n "$VER" ] && break
+  done
   [ -n "$VER" ] || die "Could not resolve the latest release. Set OKBOY_VERSION=vX.Y.Z and retry."
 fi
 
