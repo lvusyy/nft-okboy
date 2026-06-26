@@ -76,6 +76,8 @@ func run(argv []string) error {
 		return cli.CmdBackup(cfgPath, rest)
 	case "totp-uri":
 		return cli.CmdTOTPURI(cfgPath, rest)
+	case "upgrade":
+		return cli.CmdUpgrade(cfgPath, version, rest)
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", cmd)
@@ -168,6 +170,9 @@ Commands:
   cleanup [--max-age <days>]      Remove stale rules (default age: 7 days)
   backup                          Checksummed DB backup (rolling retention)
   totp-uri <user>                 Print an otpauth:// URI for a user's TOTP secret
+  upgrade [--check] [--version vX.Y.Z]
+                                  Self-update to the latest release (backs up the
+                                  DB, verifies sha256, restarts the service)
   version                         Print version and exit
 `)
 }

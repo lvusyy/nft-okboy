@@ -118,20 +118,43 @@ Prebuilt static `linux` binaries are attached to every [release](https://github.
 
 ## Quick start
 
+### Install (one command, recommended)
+
 ```bash
-# 1. Get a binary (pick your arch) or build one
+curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy/main/deploy/install.sh | sudo sh
+```
+
+The script picks the right binary for your arch (sha256-verified) → writes
+`/etc/okboy/config.yaml` (production-sane defaults) → installs and enables the
+systemd service → **creates an `admin` account and prints its one-time secret,
+highlighted, at the end**. Re-run any time to refresh the binary (config and
+database are preserved). Pin a version with `OKBOY_VERSION=vX.Y.Z`.
+
+Open your first group, authorize the admin, then open the Web console and Connect:
+
+```bash
+okboy group-add ssh 22       # manage port 22 as the "ssh" group
+okboy user-join admin ssh    # authorize admin for it
+```
+
+### Upgrade
+
+```bash
+sudo okboy upgrade           # self-update (backup DB → verify → restart → rollback on failure)
+sudo okboy upgrade --check   # check only, do not install
+```
+
+### From source / manual
+
+```bash
 make static                                  # → dist/okboy-linux-amd64 (CGO_ENABLED=0, static)
 #   or: curl -fsSLO https://github.com/lvusyy/nft-okboy/releases/latest/download/okboy-linux-amd64
-
-# 2. Configure
 cp config.example.yaml config.yaml
 ./okboy gen-secret alice                     # generate a user secret
 ./okboy -c config.yaml user-add alice        # create the user
 ./okboy -c config.yaml group-add ssh 22      # create a group bound to port 22
 ./okboy -c config.yaml user-join alice ssh   # grant alice the ssh group
-
-# 3. Serve (needs root or CAP_NET_ADMIN for nftables)
-sudo ./okboy -c config.yaml serve
+sudo ./okboy -c config.yaml serve            # serve (needs root or CAP_NET_ADMIN)
 ```
 
 Then open `https://your-server/` → enter username + secret → **Connect**.
@@ -161,6 +184,7 @@ All `/api/*` responses are `{"ok": ..., ...}`. Auth is the header
 
 ```
 serve [--debug]                    start the API server
+upgrade [--check]                  self-update to the latest release
 gen-secret [user]                  generate a secret
 user-add <name> [--admin]          create a user (prints the secret)
 user-del / user-list

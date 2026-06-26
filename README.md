@@ -101,20 +101,42 @@ SQLite（纯 Go modernc；用户 / 组 / 成员 / 审计）
 
 ## 快速开始
 
-```bash
-# 1. 拿一个二进制（选你的架构）或自己构建
-make static                                  # → dist/okboy-linux-amd64（CGO_ENABLED=0，静态）
-#   或：curl -fsSLO https://github.com/lvusyy/nft-okboy/releases/latest/download/okboy-linux-amd64
+### 一键安装（推荐）
 
-# 2. 配置
+```bash
+curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy/main/deploy/install.sh | sudo sh
+```
+
+> 国内网络慢可走镜像（脚本下载二进制时也会自动镜像兜底）：
+> `curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/lvusyy/nft-okboy/main/deploy/install.sh | sudo sh`
+
+脚本自动：按架构下载二进制（sha256 校验）→ 写入 `/etc/okboy/config.yaml`（默认值即生产可用）→ 安装并启用 systemd 服务 → **创建 admin 并在结尾高亮打印一次性密钥**。重复运行即刷新二进制（配置/数据库保留）。
+
+装完开第一个组并授权，然后浏览器打开 Web 管理台，输入用户名 + 密钥 → **Connect**：
+
+```bash
+okboy group-add ssh 22       # 把 22 端口纳管为 "ssh" 组
+okboy user-join admin ssh    # 授权 admin 使用该组
+```
+
+### 升级
+
+```bash
+sudo okboy upgrade           # 自更新到最新 release（备份 DB → 校验 → 重启 → 失败回滚）
+sudo okboy upgrade --check   # 只检查不安装
+```
+
+### 从源码 / 手动
+
+```bash
+make static                                  # → dist/okboy-linux-amd64（CGO_ENABLED=0，静态）
+#   或下载：curl -fsSLO https://github.com/lvusyy/nft-okboy/releases/latest/download/okboy-linux-amd64
 cp config.example.yaml config.yaml
 ./okboy gen-secret alice                     # 生成用户密钥
 ./okboy -c config.yaml user-add alice        # 建用户
 ./okboy -c config.yaml group-add ssh 22      # 建组（绑端口 22）
 ./okboy -c config.yaml user-join alice ssh   # 把 ssh 组授权给 alice
-
-# 3. 启动（需 root 或 CAP_NET_ADMIN 操作 nftables）
-sudo ./okboy -c config.yaml serve
+sudo ./okboy -c config.yaml serve            # 启动（需 root 或 CAP_NET_ADMIN）
 ```
 
 然后浏览器打开 `https://你的服务器/` → 输入用户名 + 密钥 → **Connect**。
@@ -144,6 +166,7 @@ sudo ./okboy -c config.yaml serve
 
 ```
 serve [--debug]                    启动 API 服务
+upgrade [--check]                  自更新到最新 release
 gen-secret [user]                  生成密钥
 user-add <name> [--admin]          建用户（打印密钥）
 user-del / user-list
