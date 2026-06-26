@@ -66,8 +66,15 @@ func VerifyHMAC(d *db.DB, header string, ttl int, clientIP string) (username str
 
 	row, err := d.GetUserByUsername(user)
 	if err != nil || row == nil {
+		// Defeat user enumeration: an unknown user must cost the same time and
+		// return the same generic message as a bad signature. Compute a dummy
+		// HMAC (zero key) so the timing matches the verified path below; the
+		// specific reason is still recorded server-side for audit.
+		dummy := hmac.New(sha256.New, make([]byte, 32))
+		dummy.Write([]byte(user + ":" + tsStr))
+		_ = hmac.Equal([]byte(signature), []byte(hex.EncodeToString(dummy.Sum(nil))))
 		_ = d.RecordFailedAttempt(userPtr, ip, "Unknown user")
-		return "", "Unknown user"
+		return "", "Invalid credentials"
 	}
 
 	// Sign the raw "<username>:<timestamp>" using the original timestamp
@@ -78,7 +85,7 @@ func VerifyHMAC(d *db.DB, header string, ttl int, clientIP string) (username str
 
 	if !hmac.Equal([]byte(signature), []byte(expected)) {
 		_ = d.RecordFailedAttempt(userPtr, ip, "Invalid signature")
-		return "", "Invalid signature"
+		return "", "Invalid credentials"
 	}
 
 	return user, ""

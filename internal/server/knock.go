@@ -362,6 +362,19 @@ func (s *Server) toggleMembership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An admin toggling ANOTHER user's membership opens/closes a firewall port
+	// for someone else — a sensitive admin write, so it requires TOTP step-up
+	// exactly like admin_add_membership / admin_remove_membership. Self-toggle
+	// stays step-up-free (self-service, re-validated by the VULN-A rule below).
+	// Body is validated BEFORE the step-up so a malformed request does not burn a
+	// single-use TOTP code (replay protection would then reject the corrected
+	// retry within the same time step).
+	if !isSelf {
+		if s.stepUp(w, r, requester, body) {
+			return
+		}
+	}
+
 	// Existence checks FIRST (404).
 	group, derr := s.db.GetGroup(groupID)
 	if derr != nil {

@@ -88,6 +88,29 @@ func (s *Server) stepUp(w http.ResponseWriter, r *http.Request, user *db.User, b
 	return false
 }
 
+// consumeTOTP verifies a counter-based TOTP code with replay protection,
+// consuming it on success — the Go analogue of app.py's _consume_totp. It returns
+// (true, nil) only for a fresh, valid code (atomically advancing totp_last_counter
+// when replay protection is on), (false, nil) for an invalid OR replayed code, and
+// a non-nil error only on a DB failure. The TOTP disable / re-enroll paths use
+// this so the most security-critical 2FA operations honor the same replay
+// protection as the step-up gate — a bare VerifyTOTP would let one captured code
+// stay valid for its whole ±window.
+func (s *Server) consumeTOTP(user *db.User, code string) (bool, error) {
+	secret := ""
+	if user.TOTPSecret != nil {
+		secret = *user.TOTPSecret
+	}
+	matched := auth.VerifyTOTPCounter(secret, code, time.Now().Unix())
+	if matched == nil {
+		return false, nil
+	}
+	if !s.cfg.TOTPReplayProtection {
+		return true, nil
+	}
+	return s.db.ConsumeTOTPCounter(user.ID, *matched)
+}
+
 // totpEnroll begins TOTP enrollment (admin only): generate a secret + otpauth URI.
 // The secret is stored but NOT active until /activate confirms a code. Mirrors
 // app.py admin_totp_enroll, including the re-enrollment guard: when TOTP is
@@ -107,11 +130,14 @@ func (s *Server) totpEnroll(w http.ResponseWriter, r *http.Request) {
 		if recode == "" {
 			recode = jsonString(body, "totp_code")
 		}
-		secret := ""
-		if user.TOTPSecret != nil {
-			secret = *user.TOTPSecret
+		// Replay-protected consume (RFC 6238 §5.2): re-enrollment replaces the
+		// 2FA secret, so a captured/replayed code must not authorize it.
+		ok, cerr := s.consumeTOTP(user, recode)
+		if cerr != nil {
+			errJSON(w, http.StatusInternalServerError, "Internal error")
+			return
 		}
-		if !auth.VerifyTOTP(secret, recode, time.Now().Unix()) {
+		if !ok {
 			writeJSON(w, http.StatusForbidden, map[string]any{
 				"ok":            false,
 				"error":         "Valid TOTP code required to re-enroll",
@@ -172,11 +198,14 @@ func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request) {
 	if user.TOTPEnabled {
 		body := readJSON(r)
 		code := jsonString(body, "totp_code")
-		secret := ""
-		if user.TOTPSecret != nil {
-			secret = *user.TOTPSecret
+		// Replay-protected consume (RFC 6238 §5.2): disabling 2FA is security-
+		// critical, so a captured/replayed code must not authorize it.
+		ok, cerr := s.consumeTOTP(user, code)
+		if cerr != nil {
+			errJSON(w, http.StatusInternalServerError, "Internal error")
+			return
 		}
-		if !auth.VerifyTOTP(secret, code, time.Now().Unix()) {
+		if !ok {
 			errJSON(w, http.StatusForbidden, "Valid TOTP code required to disable")
 			return
 		}

@@ -797,6 +797,8 @@ const I18N = {
     err_delete_failed: "delete failed",
     err_set_admin_failed: "failed to change admin rights",
     err_group_change_failed: "failed to change group",
+    err_rate_limited: "Too many requests — please wait a moment and retry.",
+    err_http: "Server returned an unexpected response (HTTP {0}).",
     err_enroll_failed: "enroll failed",
     err_activate_failed: "activate failed",
     err_disable_failed: "disable failed",
@@ -929,6 +931,8 @@ const I18N = {
     err_delete_failed: "删除失败",
     err_set_admin_failed: "更改管理员权限失败",
     err_group_change_failed: "更改分组失败",
+    err_rate_limited: "请求过于频繁，请稍候后重试。",
+    err_http: "服务器返回了非预期响应（HTTP {0}）。",
     err_enroll_failed: "注册失败",
     err_activate_failed: "激活失败",
     err_disable_failed: "禁用失败",
@@ -1146,13 +1150,45 @@ let pinAttempts = 0, pinLockedUntil = 0;
 //  API calls
 // ================================================================ //
 
+// Idempotent (GET) admin calls auto-retry when an intermediary returns a
+// non-JSON error: the admin console loads several endpoints in parallel, which
+// can momentarily exceed the nginx burst allowance (HTTP 503) — a short backoff
+// lets the token bucket refill before giving up.
+const HTTP_RETRY_MAX = 2;
+const HTTP_RETRY_BASE_MS = 350;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Safely turn a fetch Response into the API's {ok, ...} envelope. The backend
+// always speaks JSON, but an intermediary can return an HTML error page (nginx
+// 429/503 rate-limit, 502/504 while the backend restarts). Parsing HTML as JSON
+// throws a cryptic "Unexpected token '<'"; instead, drain the body and return a
+// clean, status-keyed envelope so every caller's existing r.ok / r.error
+// handling keeps working. JSON error bodies (e.g. the app-level 429 throttle)
+// pass through untouched.
+async function readJson(resp) {
+  const ct = resp.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    try { return await resp.json(); }
+    catch { /* malformed JSON — fall through to the generic envelope */ }
+  } else {
+    try { await resp.text(); } catch { /* free the socket; body is unused */ }
+  }
+  const retriable = [429, 502, 503, 504].includes(resp.status);
+  return {
+    ok: false,
+    error: retriable ? t("err_rate_limited") : t("err_http", resp.status),
+    status: resp.status,
+    retriable,
+  };
+}
+
 async function apiKnock(username, secret) {
   const auth = await buildAuth(username, secret);
   const resp = await fetch(`${API_BASE}/api/knock`, {
     method: "POST",
     headers: { "Authorization": auth },
   });
-  return resp.json();
+  return readJson(resp); // 30s knock loop is the retry; just parse safely here
 }
 
 // ================================================================ //
@@ -1186,13 +1222,15 @@ async function doKnock() {
         addLog(result.warning, "warn");
       }
     } else {
-      // Auth error → disconnect
+      // Auth error → the saved credentials are wrong/stale. Clear them so they
+      // are not replayed on the next reload, then disconnect. Rate-limit / 5xx
+      // are NOT auth errors and fall through to the warn branch (creds kept).
       if (result.error && (
-        result.error.includes("Unknown user") ||
-        result.error.includes("Invalid signature") ||
+        result.error.includes("Invalid credentials") ||
         result.error.includes("expired")
       )) {
         addLog(t("log_auth_failed", result.error), "err");
+        forgetCredentials();
         disconnect(result.error);
         return;
       }
@@ -1247,19 +1285,9 @@ function updateCountdownDisplay() {
 
 async function connect(username, secret, remember) {
   credentials = { username, secret };
-
-  // Persist credentials encrypted when "Remember" is on. A PIN is required
-  // to encrypt — if the user did not set one, we fall back to the legacy
-  // plaintext store so existing one-click reconnect still works. The admin
-  // console ALWAYS requires PIN unlock regardless.
-  if (remember) {
-    const pin = pendingPin;
-    if (pin) {
-      await encryptVault(pin, { username, secret });
-    } else {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ username, secret }));
-    }
-  }
+  // Capture and clear the pending PIN up front so it never lingers across
+  // attempts, regardless of how this connect resolves.
+  const pin = pendingPin;
   pendingPin = null;
 
   // Switch views
@@ -1271,13 +1299,24 @@ async function connect(username, secret, remember) {
   clearLog();
   addLog(t("log_connecting"), "warn");
 
-  // First knock
+  // First knock VALIDATES the credentials before we persist anything. On an
+  // auth failure doKnock clears `credentials` (and any stale saved copy), so we
+  // must not have written them to disk yet — otherwise a typo'd / revoked secret
+  // gets stranded in localStorage or the vault and replays on every reload.
   await doKnock();
+  if (!credentials) return;
 
-  // If still connected after first knock, start periodic knocking
-  if (credentials) {
-    startTimers();
+  // Credentials proven good → persist if "Remember" is on, then start the loop.
+  // A PIN encrypts into the vault; without one we fall back to the legacy
+  // plaintext store. The admin console ALWAYS requires PIN unlock regardless.
+  if (remember) {
+    if (pin) {
+      await encryptVault(pin, { username, secret });
+    } else {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ username, secret }));
+    }
   }
+  startTimers();
 }
 
 function disconnect(reason) {
@@ -1454,13 +1493,30 @@ btnPinCancel.addEventListener("click", () => {
 // ================================================================ //
 
 async function apiAdmin(method, path, body) {
-  const auth = await buildAuth(credentials.username, credentials.secret);
-  const resp = await fetch(path, {
-    method,
-    headers: { "Authorization": auth, "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return resp.json();
+  // Only GET is safe to auto-retry — replaying a POST/DELETE could double-apply
+  // a mutation. Non-idempotent calls fail fast and surface a clean message.
+  const idempotent = method === "GET";
+  for (let attempt = 0; ; attempt++) {
+    const auth = await buildAuth(credentials.username, credentials.secret);
+    let data;
+    try {
+      const resp = await fetch(path, {
+        method,
+        headers: { "Authorization": auth, "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      data = await readJson(resp);
+    } catch (err) {
+      // Network-level failure (offline, DNS, TLS): never throw — return an
+      // envelope so callers' r.ok checks handle it uniformly.
+      data = { ok: false, error: err.message, retriable: true };
+    }
+    if (data.retriable && idempotent && attempt < HTTP_RETRY_MAX) {
+      await sleep(HTTP_RETRY_BASE_MS * (attempt + 1));
+      continue;
+    }
+    return data;
+  }
 }
 
 // After a successful knock, probe admin status to reveal the Admin button.
@@ -1468,7 +1524,7 @@ async function refreshAdminFlag() {
   if (!credentials) return;
   try {
     const auth = await buildAuth(credentials.username, credentials.secret);
-    const r = await (await fetch("/api/status", { headers: { Authorization: auth } })).json();
+    const r = await readJson(await fetch("/api/status", { headers: { Authorization: auth } }));
     isAdmin = !!(r.ok && r.is_admin);
     btnAdmin.hidden = !isAdmin;
   } catch { /* ignore */ }
@@ -1527,6 +1583,11 @@ async function loadAdminConsole() {
       apiAdmin("GET", "/api/me/groups"),
       apiAdmin("GET", "/api/admin/audit?limit=50"),
     ]);
+    // apiAdmin returns an {ok:false} envelope (it no longer throws) on a
+    // non-JSON / HTTP error. Abort the whole load on the first failure with one
+    // clean message instead of rendering half-empty lists.
+    const failed = [users, groups, mine, audit].find((r) => !r || !r.ok);
+    if (failed) throw new Error(failed.error || t("err_failed"));
     renderUsers(users.users || []);
     renderGroups(groups.groups || []);
     renderMyGroups(mine.groups || []);
@@ -1679,6 +1740,12 @@ async function loadUserGroups(userId) {
   if (!panel) return;
   try {
     const r = await apiAdmin("GET", `/api/admin/users/${userId}/groups`);
+    // apiAdmin returns an {ok:false} envelope on error (it no longer throws) —
+    // surface it instead of silently rendering "(no groups)".
+    if (!r.ok) {
+      panel.innerHTML = `<span style="color:var(--red);font-size:.75rem">${esc(r.error || t("err_failed"))}</span>`;
+      return;
+    }
     const groups = r.groups || [];
     if (!groups.length) {
       panel.innerHTML = `<span style="color:var(--text2);font-size:.75rem">${esc(t("admin_no_groups"))}</span>`;
@@ -1958,7 +2025,7 @@ btnRefreshAudit.addEventListener("click", async () => {
 // ---- Two-Factor (TOTP) enrollment ---- //
 async function refreshTotp() {
   const a = await buildAuth(credentials.username, credentials.secret);
-  const r = await (await fetch("/api/status", { headers: { Authorization: a } })).json();
+  const r = await readJson(await fetch("/api/status", { headers: { Authorization: a } }));
   const on = !!(r.ok && r.totp_enabled);
   totpStatus.textContent = on ? t("totp_on") : t("totp_off");
 }

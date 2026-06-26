@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -97,10 +98,21 @@ func (m *Manager) Reconcile(user, clientIP string, enabled map[string]PortProto)
 	}
 
 	// Add missing rules for every enabled group (per-group proto preserved).
+	var addErrs []error
 	for group, pp := range enabled {
 		if !existing[key{clientIP, pp.Port, pp.Proto, group}] {
+			// Isolate per-group failures (transient nft lock, bad port, ...) so one
+			// failing add does not abort the whole reconcile and skip the stale-rule
+			// cleanup below — symmetric with the removal loop. Stale old-IP rules
+			// MUST still be removed even when a new add fails. The failure is
+			// COLLECTED (not swallowed) and surfaced after the full pass so the
+			// caller — e.g. the knock handler — can report it instead of falsely
+			// claiming success with a port that was never opened.
 			if aerr := m.AddRule(clientIP, pp.Port, user, pp.Proto, group); aerr != nil {
-				return added, removed, aerr
+				log.Printf("firewall: reconcile failed to add rule for group %s (%d/%s): %v",
+					group, pp.Port, pp.Proto, aerr)
+				addErrs = append(addErrs, fmt.Errorf("add %s (%d/%s): %w", group, pp.Port, pp.Proto, aerr))
+				continue
 			}
 			added = append(added, group)
 		}
@@ -128,7 +140,10 @@ func (m *Manager) Reconcile(user, clientIP string, enabled map[string]PortProto)
 		log.Printf("firewall: reconciled rules for %s@%s: added=%v removed=%v",
 			user, clientIP, added, removed)
 	}
-	return added, removed, nil
+	// Surface any per-group add failures AFTER the stale-removal pass has run, so
+	// the self-heal still happens but the caller learns a rule could not be
+	// applied. errors.Join(nil...) is nil, so the success path is unchanged.
+	return added, removed, errors.Join(addErrs...)
 }
 
 // CheckIPAnomaly detects suspicious IP-change churn that suggests credential
