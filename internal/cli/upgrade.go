@@ -119,18 +119,28 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 		return fmt.Errorf("install new binary: %w", rerr)
 	}
 
-	// Health-check the freshly installed binary; restore the .bak on any failure.
+	// Sanity-check the freshly installed binary runs at all (catches a corrupt or
+	// wrong-arch download) before touching the service; restore the .bak on failure.
 	if out, herr := exec.Command(exe, "--version").CombinedOutput(); herr != nil {
 		_ = os.Rename(bak, exe)
-		return fmt.Errorf("new binary failed health check (%v: %s); rolled back",
+		return fmt.Errorf("new binary failed to run (%v: %s); rolled back",
 			herr, strings.TrimSpace(string(out)))
 	}
 
 	if !*noRestart {
 		if rerr := restartService("okboy"); rerr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not restart service (restart manually): %v\n", rerr)
+			// Not systemd-managed (dev / manual run): the new binary is staged, but
+			// starting it is the operator's job — nothing to verify or roll back.
+			fmt.Fprintf(os.Stderr, "warning: could not restart service (start it manually): %v\n", rerr)
+		} else if !waitServiceActive("okboy", 12*time.Second) {
+			// The service restarted but never reached active — e.g. the new binary
+			// crashes on `serve`. A bare `--version` check (above) cannot catch that,
+			// so verify the live service and roll back to the previous binary.
+			_ = os.Rename(bak, exe)
+			_ = exec.Command("systemctl", "restart", "okboy").Run()
+			return fmt.Errorf("upgraded binary did not bring the service up; rolled back to the previous version")
 		} else {
-			fmt.Println("Service restarted.")
+			fmt.Println("Service restarted and healthy.")
 		}
 	}
 
@@ -267,6 +277,24 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return os.WriteFile(dst, b, mode)
+}
+
+// waitServiceActive polls `systemctl is-active <name>` until it reports "active"
+// or the timeout elapses. A freshly restarted okboy needs a moment to open its DB,
+// ensure the nft base table, and bind its port, so a single immediate check would
+// race the startup.
+func waitServiceActive(name string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		out, _ := exec.Command("systemctl", "is-active", name).Output()
+		if strings.TrimSpace(string(out)) == "active" {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(1500 * time.Millisecond)
+	}
 }
 
 // restartService restarts a systemd unit, but only when systemd actually manages
