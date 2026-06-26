@@ -52,15 +52,22 @@ command -v nft >/dev/null 2>&1 || warn "nft (nftables) is not installed — inst
 VER="${OKBOY_VERSION:-}"
 if [ -z "$VER" ]; then
   say "Resolving latest release…"
-  VER=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+  VER=$(curl -fsSL --connect-timeout 8 --max-time 30 "https://api.github.com/repos/$REPO/releases/latest" \
         | sed -n 's/.*"tag_name":[ ]*"\([^"]*\)".*/\1/p' | head -n1) || true
   [ -n "$VER" ] || die "Could not resolve the latest release. Set OKBOY_VERSION=vX.Y.Z and retry."
 fi
 
 # ---- download helper: try direct, then CN-friendly mirrors ----
+# curl gets a connect timeout AND a stall guard (--speed-limit/--speed-time): the
+# GitHub release CDN can connect then reset mid-transfer, which would hang a plain
+# `curl` forever and never fail over to a mirror. Abort a transfer that drops below
+# 1 KB/s for 20s so the next mirror is tried.
 dl() { # dl <github-url> <out>
   for pre in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
-    if curl -fsSL "$pre$1" -o "$2" 2>/dev/null; then return 0; fi
+    if curl -fsSL --connect-timeout 8 --speed-limit 1024 --speed-time 20 --max-time 600 \
+        "$pre$1" -o "$2" 2>/dev/null; then
+      return 0
+    fi
   done
   return 1
 }
