@@ -239,8 +239,10 @@ func ghDownload(repo, tag, asset string) ([]byte, error) {
 func ghGet(url string) ([]byte, error) {
 	const (
 		connectTimeout = 8 * time.Second
-		stallTimeout   = 20 * time.Second
-		hardCap        = 10 * time.Minute
+		stallTimeout   = 15 * time.Second // abort if NO byte arrives for this long
+		minSpeed       = 50 * 1024        // B/s; sustained slower = a blocked/stalled path, not a slow link
+		speedGrace     = 10 * time.Second // give the transfer this long before judging its speed
+		hardCap        = 8 * time.Minute
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), hardCap)
 	defer cancel()
@@ -262,15 +264,22 @@ func ghGet(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s → HTTP %d", url, resp.StatusCode)
 	}
-	watchdog := time.AfterFunc(stallTimeout, cancel) // fires if a read stalls
+	watchdog := time.AfterFunc(stallTimeout, cancel) // fires if a read stalls (no data)
 	defer watchdog.Stop()
 	var buf bytes.Buffer
 	chunk := make([]byte, 64*1024)
+	start := time.Now()
 	for {
 		n, rerr := resp.Body.Read(chunk)
 		if n > 0 {
 			buf.Write(chunk[:n])
 			watchdog.Reset(stallTimeout)
+			// A blocked/reset CDN path can dribble bytes slowly, keeping the no-data
+			// watchdog alive forever; fail over once the average rate proves too low
+			// to be a real (if slow) link. Matches install.sh's curl --speed-time.
+			if el := time.Since(start); el > speedGrace && float64(buf.Len())/el.Seconds() < minSpeed {
+				return nil, fmt.Errorf("%s → throughput below %d B/s, failing over", url, minSpeed)
+			}
 		}
 		if rerr == io.EOF {
 			return buf.Bytes(), nil
