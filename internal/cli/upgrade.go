@@ -132,7 +132,7 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 			// Not systemd-managed (dev / manual run): the new binary is staged, but
 			// starting it is the operator's job — nothing to verify or roll back.
 			fmt.Fprintf(os.Stderr, "warning: could not restart service (start it manually): %v\n", rerr)
-		} else if !waitServiceActive("okboy", 12*time.Second) {
+		} else if !serviceHealthy("okboy", 10*time.Second) {
 			// The service restarted but never reached active — e.g. the new binary
 			// crashes on `serve`. A bare `--version` check (above) cannot catch that,
 			// so verify the live service and roll back to the previous binary.
@@ -279,22 +279,26 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return os.WriteFile(dst, b, mode)
 }
 
-// waitServiceActive polls `systemctl is-active <name>` until it reports "active"
-// or the timeout elapses. A freshly restarted okboy needs a moment to open its DB,
-// ensure the nft base table, and bind its port, so a single immediate check would
-// race the startup.
-func waitServiceActive(name string, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for {
-		out, _ := exec.Command("systemctl", "is-active", name).Output()
-		if strings.TrimSpace(string(out)) == "active" {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(1500 * time.Millisecond)
+// serviceHealthy reports whether the unit is genuinely up after a restart, not just
+// momentarily "active". A Type=simple service is reported "active" for the brief
+// instant between each restart spawn and its crash, so any check that returns on the
+// first "active" reading false-positives on a crash-loop — exactly how a serve-panic
+// could slip past the upgrade health gate. Instead let the service settle, then
+// require BOTH that systemd did not auto-restart it during the window (NRestarts
+// stable) AND that it ends in the active state.
+func serviceHealthy(name string, settle time.Duration) bool {
+	n0 := unitProp(name, "NRestarts")
+	time.Sleep(settle)
+	if unitProp(name, "NRestarts") != n0 {
+		return false // auto-restarted during the window → crash-looping
 	}
+	return unitProp(name, "ActiveState") == "active"
+}
+
+// unitProp returns a single systemd unit property value, or "" on error.
+func unitProp(name, prop string) string {
+	out, _ := exec.Command("systemctl", "show", name, "-p", prop, "--value").Output()
+	return strings.TrimSpace(string(out))
 }
 
 // restartService restarts a systemd unit, but only when systemd actually manages
